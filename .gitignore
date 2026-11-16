@@ -7,3 +7,6 @@ frame-times.csv
 *.obj
 *.pdb
 *.exe
+qa-runtimes/
+qa-results/
+release-stage/

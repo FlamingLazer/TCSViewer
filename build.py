@@ -4,6 +4,8 @@ import os, subprocess, json, urllib.request, tarfile, io, argparse
 
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--test-build',action='store_true',help='Build a separately named non-elevated QA executable; do not distribute it as the normal app.')
+parser.add_argument('--output-dir', type=lambda value: Path(value).resolve(), help='Build into another folder, e.g. while the normal executable is running.')
+parser.add_argument('--policy-test', action='store_true', help='Build and run version-policy boundary checks only.')
 options=parser.parse_args()
 
 root = Path(__file__).resolve().parent
@@ -43,7 +45,14 @@ env = os.environ.copy()
 env['INCLUDE'] = ';'.join(map(str, [tools/'include'] + [sdk/'Include'/sdk_version/p for p in ['ucrt','shared','um','winrt']]))
 env['LIB'] = ';'.join(map(str, [tools/'lib/x64']+[sdk/'Lib'/sdk_version/p/'x64' for p in ['ucrt','um']]))
 env['PATH'] = str(tools/'bin/Hostx64/x64')+';'+str(sdk/'bin'/sdk_version/'x64')+';'+env.get('PATH','')
-out=root/'dist'; out.mkdir(exist_ok=True)
+out=options.output_dir.resolve() if options.output_dir else root/'dist'; out.mkdir(parents=True,exist_ok=True)
+if options.policy_test:
+    test_exe=out/'ObsCompatibilityTest.exe'
+    subprocess.run([str(tools/'bin/Hostx64/x64/cl.exe'), '/nologo', '/std:c++17', '/EHsc', '/MT',
+                    str(root/'src/obs_compat_test.cpp'), '/Fo'+str(out/'obs-compat-test.obj'),
+                    '/Fe'+str(test_exe)], env=env, check=True)
+    subprocess.run([str(test_exe)], check=True)
+    raise SystemExit(0)
 execution_level='asInvoker' if options.test_build else 'requireAdministrator'
 executable_name='TCSViewerTest.exe' if options.test_build else 'TCSViewer.exe'
 resource_name='viewer-test' if options.test_build else 'viewer'
@@ -60,7 +69,7 @@ subprocess.run([str(sdk/'bin'/sdk_version/'x64/rc.exe'), '/nologo', '/fo'+str(ou
 command=[str(tools/'bin/Hostx64/x64/cl.exe'), '/nologo','/std:c++17','/EHsc','/O2','/W4','/utf-8','/MT','/DUNICODE','/D_UNICODE', '/DNDEBUG', '/D_CRT_SECURE_NO_WARNINGS',
     '/I'+str(headers/'libobs'), '/I'+str(root/'generated'), str(root/'src/main.cpp'), '/Fo'+str(out/f'{resource_name}.obj'), '/Fe'+str(out/executable_name),
     str(out/f'{resource_name}.res'), '/link','/SUBSYSTEM:WINDOWS','/DYNAMICBASE','/NXCOMPAT', '/MANIFEST:NO',
-    'user32.lib','gdi32.lib','shell32.lib','d3d11.lib','dxgi.lib','d3dcompiler.lib','avrt.lib','ole32.lib','uxtheme.lib']
+    'advapi32.lib','user32.lib','gdi32.lib','shell32.lib','d3d11.lib','dxgi.lib','d3dcompiler.lib','avrt.lib','ole32.lib','uxtheme.lib']
 subprocess.run(command, env=env, check=True)
 print('Built',out/executable_name,'with',execution_level)
 

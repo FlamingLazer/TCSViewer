@@ -3,8 +3,10 @@
 #include <util/base.h>
 #include <stdexcept>
 #include <string>
+#include "obs_compat.hpp"
 
-// Function types come from the matching, GPL-licensed OBS 32.1.2 headers.
+// Compile against GPL-licensed OBS 32.1.2 headers for the baseline API.
+// Stable patch releases in the representative-tested minor series are accepted.
 // Resolve the installed runtime explicitly; no OBS binaries are redistributed.
 #define OBS_FUNCTIONS(X) \
  X(obs_get_version_string) X(obs_startup) X(obs_shutdown) X(obs_add_data_path) \
@@ -30,15 +32,18 @@ struct ObsApi {
   if (dll) return;
   SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_USER_DIRS);
   AddDllDirectory(bin.c_str());
-  dll = LoadLibraryExW((bin + L"\\obs.dll").c_str(), nullptr,
+  HMODULE candidate = LoadLibraryExW((bin + L"\\obs.dll").c_str(), nullptr,
     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_USER_DIRS);
-  if (!dll) throw std::runtime_error("Cannot load installed obs.dll. Check obs_dir in viewer.ini.");
-#define LOAD(name) name = reinterpret_cast<decltype(name)>(GetProcAddress(dll, #name)); \
+  if (!candidate) throw std::runtime_error("Cannot load installed obs.dll. Check obs_dir in viewer.ini.");
+  try {
+#define LOAD(name) name = reinterpret_cast<decltype(name)>(GetProcAddress(candidate, #name)); \
   if (!name) throw std::runtime_error("Missing OBS runtime function: " #name);
   OBS_FUNCTIONS(LOAD)
 #undef LOAD
   std::string version = obs_get_version_string();
-  if (version.rfind("32.1.", 0) != 0)
-   throw std::runtime_error("This prototype requires OBS 32.1.x. Installed: " + version);
+  if (!SupportsObsRuntime(version))
+   throw std::runtime_error("Supported OBS series: 32.0.x, 32.1.x, 32.2.x and 33.0.x (stable releases). Installed: " + version);
+  dll = candidate;
+  } catch (...) { FreeLibrary(candidate); throw; }
  }
 };

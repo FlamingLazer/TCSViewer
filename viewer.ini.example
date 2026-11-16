@@ -1,5 +1,5 @@
 [viewer]
-obs_dir=C:\Program Files\obs-studio
+obs_dir=
 game_exe=LEGOStarWarsSaga.exe
 monitor=\\.\DISPLAY2
 hotkey_modifiers=3

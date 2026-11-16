@@ -22,6 +22,7 @@
 #include <cmath>
 #include <uxtheme.h>
 #include "obs_api.hpp"
+#include "obs_discovery.hpp"
 #include "hotkey.hpp"
 #include "window_layout.hpp"
 
@@ -75,7 +76,7 @@ static std::vector<Monitor> Monitors() {
 
 struct Config {
  fs::path ini;
- std::wstring obsDir = L"C:\\Program Files\\obs-studio";
+ std::wstring obsDir; // Empty means automatic discovery; explicit overrides remain available for QA.
  std::wstring exe = L"LEGOStarWarsSaga.exe";
  std::wstring monitor = L"\\\\.\\DISPLAY2";
  UINT modifiers = MOD_CONTROL | MOD_ALT, key = VK_F10;
@@ -345,6 +346,7 @@ class App {
  UINT dpi=96;
  std::vector<Monitor> monitors;
  Config cfg;
+ std::wstring selectedObsDir;
  fs::path base;
  ObsApi obs;
  bool engineReady = false, videoReady = false, callbackReady = false, showing = false;
@@ -529,21 +531,29 @@ private:
  }
  void InitializeEngine() {
   if (engineReady) return;
-  auto bin = cfg.obsDir + L"\\bin\\64bit";
+  if (selectedObsDir.empty()) {
+   selectedObsDir = cfg.obsDir.empty() ? DiscoverObs(base).wstring() : cfg.obsDir;
+   Log("OBS runtime selected: " + Utf8(selectedObsDir) + (cfg.obsDir.empty() ? " (automatic)" : " (override)"));
+  }
+  auto bin = selectedObsDir + L"\\bin\\64bit";
   obs.Load(bin); obs.base_set_log_handler(ObsLog, nullptr);
   // Only our process's working directory changes. OBS's own configuration is untouched.
   SetCurrentDirectoryW(bin.c_str());
   fs::create_directories(base / L"runtime");
   if (!obs.obs_startup("en-US", Utf8((base/L"runtime").wstring()).c_str(), nullptr)) throw std::runtime_error("OBS capture engine failed to initialize.");
   engineReady = true;
-  obs.obs_add_data_path(Utf8(cfg.obsDir + L"\\data\\libobs").c_str());
+  obs.obs_add_data_path(Utf8(selectedObsDir + L"\\data\\libobs").c_str());
   Log("Capture engine ready: " + std::string(obs.obs_get_version_string()));
  }
  void LoadCaptureModule() {
   if(moduleReady) return;
   obs_module_t* module = nullptr;
-  auto dllPath=Utf8(fs::path(cfg.obsDir+L"\\obs-plugins\\64bit\\win-capture.dll").generic_wstring());
-  auto dataPath=Utf8(fs::path(cfg.obsDir+L"\\data\\obs-plugins\\win-capture").generic_wstring());
+  const bool coreLayout = std::string(obs.obs_get_version_string()).rfind("33.0.", 0) == 0;
+  fs::path captureDir = fs::path(selectedObsDir) / (coreLayout ? L"core/win-capture" : L"obs-plugins/64bit");
+  fs::path captureData = coreLayout ? captureDir / L"data" : fs::path(selectedObsDir) / L"data/obs-plugins/win-capture";
+  auto dllPath=Utf8((captureDir/L"win-capture.dll").generic_wstring());
+  auto dataPath=Utf8(captureData.generic_wstring());
+  Log("Game Capture module: " + dllPath);
   int result = obs.obs_open_module(&module, dllPath.c_str(), dataPath.c_str());
   if (result != 0 || !module || !obs.obs_init_module(module)) throw std::runtime_error("Cannot initialize OBS Game Capture module.");
   obs.obs_post_load_modules(); moduleReady=true;
@@ -580,7 +590,7 @@ private:
   if (!selfTest && MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST)==selected.handle)
    throw std::runtime_error("The viewer monitor contains the focused game. Select your other monitor.");
   InitializeEngine();
-  obs_video_info video{}; auto graphicsPath = Utf8(cfg.obsDir + L"\\bin\\64bit\\libobs-d3d11.dll");
+  obs_video_info video{}; auto graphicsPath = Utf8(selectedObsDir + L"\\bin\\64bit\\libobs-d3d11.dll");
   video.graphics_module=graphicsPath.c_str(); video.fps_num=cfg.captureFps; video.fps_den=1;
   video.base_width=video.output_width=bridge.width; video.base_height=video.output_height=bridge.height;
   video.output_format=VIDEO_FORMAT_BGRA; video.colorspace=VIDEO_CS_709; video.range=VIDEO_RANGE_FULL;
@@ -791,7 +801,7 @@ int WINAPI wWinMain(HINSTANCE h,HINSTANCE,PWSTR cmd,int) {
  wchar_t path[MAX_PATH]; GetModuleFileNameW(nullptr,path,MAX_PATH); fs::path base=fs::path(path).parent_path();
  logFile.open(base/L"viewer.log",std::ios::trunc); timingFile.open(base/L"timing.csv",std::ios::trunc);
  timingFile << "qpc_ms,present_calls,reused_mailbox_frames,intervals_over_25ms,max_present_interval_ms,last_present_call_ms,last_mailbox_age_ms,producer_mutex_busy_total\n";
- Log("TCS Viewer 0.6.0-alpha.1 starting");
+ Log("TCS Viewer 0.6.0-alpha.2 starting");
  int result=1;
  try { App app(h,wcsstr(cmd,L"--self-test")!=nullptr,wcsstr(cmd,L"--capture-test")!=nullptr,wcsstr(cmd,L"--expect-gray")!=nullptr,wcsstr(cmd,L"--windowed-test")!=nullptr,wcsstr(cmd,L"--ui-snapshot")!=nullptr,wcsstr(cmd,L"--framed-test")!=nullptr); result=app.Run(); }
  catch(const std::exception& e) { Log(std::string("FATAL: ")+e.what()); MessageBoxW(nullptr,Wide(e.what()).c_str(),L"TCS Viewer",MB_OK|MB_ICONERROR); }
