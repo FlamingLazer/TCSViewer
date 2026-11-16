@@ -507,7 +507,7 @@ private:
   hint=Child(L"STATIC",L"",0,24,494,592,25);SendMessageW(hint,WM_SETFONT,WPARAM(smallFont),TRUE);UpdateHint();
   Child(L"BUTTON", L"Save settings", BS_OWNERDRAW | WS_TABSTOP,24,540,176,36,101);
   Child(L"BUTTON", L"Stop viewer", BS_PUSHBUTTON | WS_TABSTOP,216,540,128,36,102);
-  status = Child(L"STATIC", L"OFF  /  Ready. Capture uses no GPU while off.",0,24,607,592,30);
+  status = Child(L"STATIC", L"OFF  /  Ready.",0,24,607,592,30);
  }
  void Apply() {
   Stop(); wchar_t text[512]; GetWindowTextW(gameEdit,text,512); cfg.exe = text;
