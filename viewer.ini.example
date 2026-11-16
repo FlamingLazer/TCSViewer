@@ -1,0 +1,14 @@
+[viewer]
+obs_dir=C:\Program Files\obs-studio
+game_exe=LEGOStarWarsSaga.exe
+monitor=\\.\DISPLAY2
+hotkey_modifiers=3
+hotkey_vk=121
+capture_fps=120
+windowed=0
+framed_window=0
+window_size=2
+window_position=0
+window_placed=0
+window_x=0
+window_y=0

@@ -1,0 +1,9 @@
+dist/
+generated/
+__pycache__/
+viewer.ini
+*.log
+frame-times.csv
+*.obj
+*.pdb
+*.exe
