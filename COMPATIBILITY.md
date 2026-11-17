@@ -70,3 +70,32 @@ OBS was still recording after the viewer finished. The finalized MKV contained
 the viewer cycles were 127,127,127. No existing OBS scenes/profiles were modified.
 The full 12-check standalone matrix passed again across all four representatives.
 Actual TCS gameplay and long-running recording still require a user comparison.
+
+## Shared-texture colour correction ? v0.6.2
+
+The earlier concurrency tests used an sRGB-capable D3D11 shared texture. They did
+not cover the typed BGRA/BGRX UNORM shared textures used by D3D9 capture. With those
+textures the reader sampled encoded bytes without sRGB decoding, then encoded the
+output again: a controlled BGRX producer reproduced 128 becoming 187 in v0.6.1.
+
+The reader now follows OBS Game Capture's handling: when the shared texture uses a
+typed UNORM format, it copies the bytes into a private sRGB-capable texture before
+sampling. It preserves the original shared capture and uses only a GPU copy. This
+is a colour-space correction, not a brightness filter or monitor adjustment.
+
+A controlled typed-texture fixture now covers BGRA and BGRX. It publishes shared
+capture mappings for its own process only and does not hook a game. The reader's
+GPU readback verifies the expected grey value over three start/stop cycles,
+including framed resize and opaque-edge checks. The test also verifies that the
+sampling-copy path was exercised. Run `python test_shared_colour.py --obs-dir
+<OBS-root>`; optional `--levels` and `--format` select test values/formats.
+
+All 10 typed-texture cases passed: BGRA and BGRX at 128 on OBS 32.0.4, 32.1.2,
+32.2.2 and 33.0.1, plus BGRX at 32 and 224 on 33.0.1. Corrected BGRX mid-grey was
+128,128,128 instead of the reproduced 187,187,187. Each case verified three cycles
+and resized output coverage. The shared-memory compatibility regression also
+passed. An actual isolated OBS 33.0.1 recording remained active through the reader
+cycles, finalized with 744 decoded frames over 24.833 seconds, and retained grey
+127,127,127 at three sampled points. The original user's game and recording
+configuration were not modified. Physical display appearance still needs the
+user's real-game comparison after replacing the previous executable.

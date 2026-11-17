@@ -32,10 +32,12 @@ class ObsSharedCapture {
  HWND window=nullptr;
  ObsHookPrefix current{};
  gs_texture_t* texture=nullptr;
+ gs_texture_t* srgbTexture=nullptr;
  double retryAfter=0, aliveCheckAfter=0;
  bool alive=false;
  static std::wstring Name(const wchar_t* prefix, DWORD id){return std::wstring(prefix)+std::to_wstring(id);}
  void CloseData(ObsApi& api) {
+  if(srgbTexture)api.gs_texture_destroy(srgbTexture);srgbTexture=nullptr;
   if(texture)api.gs_texture_destroy(texture);texture=nullptr;
   if(data)UnmapViewOfFile(data);data=nullptr;
   if(dataMap)CloseHandle(dataMap);dataMap=nullptr;
@@ -102,6 +104,16 @@ public:
     if(memoryMutex[0] && memoryMutex[1])texture=api.gs_texture_create(snapshot.width,snapshot.height,format,1,nullptr,GS_DYNAMIC);
    } else throw std::runtime_error("Unknown OBS shared capture type.");
    if(!texture){CloseData(api);return nullptr;}
+   // D3D9 shares typed UNORM textures: their SRV cannot decode sRGB.
+   // Match OBS game-capture: copy into a general (typeless/sRGB-capable)
+   // texture before sRGB sampling, otherwise the output is encoded twice.
+   const auto format=api.gs_texture_get_color_format(texture);
+   const auto general=gs_generalize_format(format);
+   if(general!=format){
+    srgbTexture=api.gs_texture_create(api.gs_texture_get_width(texture),api.gs_texture_get_height(texture),general,1,nullptr,0);
+    if(!srgbTexture)throw std::runtime_error("Cannot create the OBS colour-correct sampling texture.");
+    Log("OBS shared capture: using sRGB-capable sampling copy for typed texture");
+   }
    current=snapshot;++connections;
    Log("OBS shared capture attached (read-only): "+std::to_string(snapshot.width)+"x"+std::to_string(snapshot.height)+" map="+std::to_string(snapshot.mapId)+(snapshot.type==1?" shared texture":" shared memory"));
   }
@@ -119,6 +131,7 @@ public:
    else {ReleaseMutex(memoryMutex[index]);throw std::runtime_error("Invalid OBS shared-memory frame bounds.");}
    ReleaseMutex(memoryMutex[index]);
   }
+  if(srgbTexture){api.gs_copy_texture(srgbTexture,texture);return srgbTexture;}
   return texture;
  }
  bool Flipped()const{return current.flip!=0;}

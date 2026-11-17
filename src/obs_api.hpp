@@ -22,6 +22,7 @@
  X(gs_matrix_push) X(gs_matrix_pop) X(gs_matrix_identity) X(gs_matrix_scale3f) \
  X(gs_matrix_translate3f) X(gs_blend_state_push) X(gs_blend_state_pop) X(gs_reset_blend_state) \
  X(gs_texture_open_shared) X(gs_texture_destroy) X(gs_texture_create) X(gs_texture_set_image) \
+ X(gs_texture_get_color_format) X(gs_copy_texture) \
  X(gs_texture_get_width) X(gs_texture_get_height) X(obs_get_base_effect) \
  X(gs_effect_get_param_by_name) X(gs_effect_set_texture_srgb) X(gs_effect_loop) X(gs_draw_sprite) \
  X(gs_framebuffer_srgb_enabled) X(gs_enable_framebuffer_srgb) \

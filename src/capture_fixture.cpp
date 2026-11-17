@@ -5,6 +5,7 @@
 #include <d3d11.h>
 #include <dxgi.h>
 #include <cstdio>
+#include "shared_fixture.hpp"
 static LRESULT CALLBACK Proc(HWND h, UINT m, WPARAM w, LPARAM l) {
  if (m == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
  if (m == WM_CLOSE) { DestroyWindow(h); return 0; }
@@ -22,11 +23,15 @@ int WINAPI wWinMain(HINSTANCE h,HINSTANCE,PWSTR cmd,int) {
   HRESULT result=D3D11CreateDeviceAndSwapChain(nullptr,D3D_DRIVER_TYPE_HARDWARE,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,nullptr,0,D3D11_SDK_VERSION,&s,&swap,&d,nullptr,&ctx);
   if(FAILED(result))return 3;
   ID3D11Texture2D* back=nullptr; swap->GetBuffer(0,IID_PPV_ARGS(&back)); ID3D11RenderTargetView* target=nullptr; d->CreateRenderTargetView(back,nullptr,&target); back->Release();
+  TypedSharedFixture typed;
+  if(wcsstr(cmd,L"--typed-share") && !typed.Create(d,w,wcsstr(cmd,L"--bgrx")!=nullptr))return 4;
   ULONGLONG begin=GetTickCount64(); unsigned f=0; MSG message{}; bool done=false;
   while(!done && GetTickCount64()-begin<45000) {
    while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)){if(message.message==WM_QUIT)done=true;TranslateMessage(&message);DispatchMessageW(&message);}
    float color[4]={float((f*5)%256)/255,float((f*3)%256)/255,float((f*7)%256)/255,1};
    if(wcsstr(cmd,L"--gray")) color[0]=color[1]=color[2]=0.5f;
+   if(auto* value=wcsstr(cmd,L"--gray-level="))color[0]=color[1]=color[2]=float(wcstol(value+13,nullptr,10))/255.f;
+   if(typed.target){ctx->ClearRenderTargetView(typed.target,color);ctx->Flush();}
    ctx->ClearRenderTargetView(target,color); swap->Present(0,0); ++f; Sleep(25);
   }
   target->Release();swap->Release();ctx->Release();d->Release();if(IsWindow(w))DestroyWindow(w);return 0;

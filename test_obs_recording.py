@@ -86,11 +86,17 @@ ChannelSetup=Stereo
 
     def request(kind, data=None):
         identifier = uuid.uuid4().hex
+        deadline = time.monotonic() + 25
         connection.send(json.dumps(dict(op=6, d=dict(requestType=kind, requestId=identifier, requestData=data or {}))))
         while True:
             reply = json.loads(connection.recv())
             if reply['op'] == 7 and reply['d']['requestId'] == identifier:
                 if not reply['d']['requestStatus']['result']:
+                    if reply['d']['requestStatus']['code'] == 207 and time.monotonic() < deadline:
+                        time.sleep(0.25)
+                        identifier = uuid.uuid4().hex
+                        connection.send(json.dumps(dict(op=6, d=dict(requestType=kind, requestId=identifier, requestData=data or {}))))
+                        continue
                     raise RuntimeError(kind + ': ' + str(reply['d']['requestStatus']))
                 return reply['d'].get('responseData', {})
 

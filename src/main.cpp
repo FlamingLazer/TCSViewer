@@ -66,6 +66,7 @@ static void Check(HRESULT hr, const char* what) {
 }
 #include "obs_shared_capture.hpp"
 static bool forcePassiveTest=false,forceMemoryTest=false;
+static int expectedGray=128;
 
 struct Monitor { HMONITOR handle; RECT rect; RECT work; std::wstring name; bool primary; };
 static BOOL CALLBACK MonitorCallback(HMONITOR h, HDC, LPRECT, LPARAM value) {
@@ -288,12 +289,12 @@ private:
      Check(context->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped),"Read test pixel");
      auto* pixel=static_cast<unsigned char*>(mapped.pData)+(td.Height/2)*mapped.RowPitch+(td.Width/2)*4;
      bool nonblack=pixel[0] || pixel[1] || pixel[2];
-     bool gray=abs(int(pixel[0])-128)<=3 && abs(int(pixel[1])-128)<=3 && abs(int(pixel[2])-128)<=3;
+     bool gray=abs(int(pixel[0])-expectedGray)<=3 && abs(int(pixel[1])-expectedGray)<=3 && abs(int(pixel[2])-expectedGray)<=3;
      std::string values=std::to_string(pixel[0])+","+std::to_string(pixel[1])+","+std::to_string(pixel[2]);
      context->Unmap(staging.Get(),0);
      if (!nonblack && ClockMs()-validationStarted>3000) throw std::runtime_error("Self-test received an unexpectedly black center pixel.");
      if (nonblack) {
-     if (expectGray && !gray) throw std::runtime_error("Mid-grey colour test failed. Expected 128,128,128; got "+values);
+     if (expectGray && !gray) throw std::runtime_error("Grey colour test failed. Expected "+std::to_string(expectedGray)+"; got "+values);
      Log("SELFTEST mailbox pixel BGR="+values);
      pixelsChecked=true; pixelsVerified=true; Log("SELFTEST GPU pixel check passed");
      }
@@ -309,7 +310,7 @@ private:
     Check(context->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped),"Read resized surface pixels");
     auto* center=static_cast<unsigned char*>(mapped.pData)+(testDesc.Height/2)*mapped.RowPitch+(testDesc.Width/2)*4;
     auto* edge=static_cast<unsigned char*>(mapped.pData)+(testDesc.Height-1)*mapped.RowPitch+(testDesc.Width/2)*4;
-    bool centerValid=abs(int(center[0])-128)<=3 && abs(int(center[1])-128)<=3 && abs(int(center[2])-128)<=3 && center[3]==255;
+    bool centerValid=abs(int(center[0])-expectedGray)<=3 && abs(int(center[1])-expectedGray)<=3 && abs(int(center[2])-expectedGray)<=3 && center[3]==255;
     bool opaqueEdge=edge[3]==255;
     bool blackLetterbox=viewport.Height>=desc.Height-2 || (edge[0]==0 && edge[1]==0 && edge[2]==0);
     context->Unmap(staging.Get(),0);
@@ -841,8 +842,9 @@ int WINAPI wWinMain(HINSTANCE h,HINSTANCE,PWSTR cmd,int) {
  wchar_t path[MAX_PATH]; GetModuleFileNameW(nullptr,path,MAX_PATH); fs::path base=fs::path(path).parent_path();
  logFile.open(base/L"viewer.log",std::ios::trunc); timingFile.open(base/L"timing.csv",std::ios::trunc);
  timingFile << "qpc_ms,present_calls,reused_mailbox_frames,intervals_over_25ms,max_present_interval_ms,last_present_call_ms,last_mailbox_age_ms,producer_mutex_busy_total\n";
- Log("TCS Viewer 0.6.1 starting");
+ Log("TCS Viewer 0.6.2 starting");
  int result=1;
+ if(testing)if(auto* value=wcsstr(cmd,L"--expect-gray="))expectedGray=std::clamp(int(wcstol(value+14,nullptr,10)),1,254);
  forcePassiveTest=testing && wcsstr(cmd,L"--passive-test")!=nullptr;
  forceMemoryTest=testing && wcsstr(cmd,L"--memory-test")!=nullptr;
  try { App app(h,wcsstr(cmd,L"--self-test")!=nullptr,wcsstr(cmd,L"--capture-test")!=nullptr,wcsstr(cmd,L"--expect-gray")!=nullptr,wcsstr(cmd,L"--windowed-test")!=nullptr,wcsstr(cmd,L"--ui-snapshot")!=nullptr,wcsstr(cmd,L"--framed-test")!=nullptr); result=app.Run(); }
