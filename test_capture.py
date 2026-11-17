@@ -18,6 +18,8 @@ env['PATH']=str(tools/'bin/Hostx64'/arch)+';'+env.get('PATH','')
 out=options.viewer_dir.resolve() if options.viewer_dir else root/'dist'
 out.mkdir(parents=True,exist_ok=True)
 subprocess.run([str(tools/'bin/Hostx64'/arch/'cl.exe'),'/nologo','/O2','/MT','/EHsc','/DUNICODE','/D_UNICODE',str(root/'src/capture_fixture.cpp'),'/Fo'+str(out/'fixture.obj'),'/Fe'+str(out/'TCSCaptureFixture.exe'),'/link','/SUBSYSTEM:WINDOWS','user32.lib','d3d9.lib','d3d11.lib','dxgi.lib'],env=env,check=True)
+if '--build-only' in sys.argv:
+    raise SystemExit(0)
 fixture=subprocess.Popen([str(out/'TCSCaptureFixture.exe')]+(['--d3d11','--gray'] if '--d3d11' in sys.argv else []))
 try:
     time.sleep(0.5)

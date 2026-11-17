@@ -11,6 +11,8 @@ Show LEGO Star Wars: The Complete Saga on a second monitor and toggle the viewer
 
 OBS is detected automatically. If your portable OBS copy is not found, start OBS before toggling the viewer.
 
+When recording in OBS, keep your game's Game Capture source visible in the active scene. The viewer uses that capture automatically.
+
 ## Controls
 
 - **Fullscreen:** fills the selected monitor.

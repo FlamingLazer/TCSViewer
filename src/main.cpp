@@ -64,6 +64,9 @@ static void ObsLog(int level, const char* fmt, va_list args, void*) {
 static void Check(HRESULT hr, const char* what) {
  if (FAILED(hr)) { std::ostringstream s; s << what << " (HRESULT 0x" << std::hex << unsigned(hr) << ")"; throw std::runtime_error(s.str()); }
 }
+#include "obs_shared_capture.hpp"
+static bool forcePassiveTest=false,forceMemoryTest=false;
+
 struct Monitor { HMONITOR handle; RECT rect; RECT work; std::wstring name; bool primary; };
 static BOOL CALLBACK MonitorCallback(HMONITOR h, HDC, LPRECT, LPARAM value) {
  MONITORINFOEXW m{}; m.cbSize = sizeof(m); GetMonitorInfoW(h, &m);
@@ -157,6 +160,7 @@ class Presenter {
  std::atomic<bool> running{false};
 public:
  std::atomic<uint64_t> displayed{0};
+ std::atomic<bool> pixelsVerified{false};
  std::atomic<unsigned> surfaceWidth{0},surfaceHeight{0},surfaceGeneration{0};
  std::atomic<unsigned> resizedPresented{0};
  std::atomic<bool> resizedCoverageVerified{false};
@@ -237,6 +241,7 @@ private:
   ID3D11SamplerState* smp = sampler.Get(); context->PSSetSamplers(0, 1, &smp);
   uint64_t serial = 0, presents = 0, repeats = 0, longFrames = 0, sessionLong = 0;
   bool pixelsChecked = false;
+  double validationStarted=0;
   bool surfacePixelsChecked=false;
   double previous = 0, report = ClockMs(), worst = 0, publicationAge = 0;
   Log("Presenter started: flip discard, maximum frame latency 1, compositor-synchronized, no production CPU readback");
@@ -276,6 +281,7 @@ private:
     publicationAge = std::max(0.0, ClockMs() - bridge.publishedMs.load());
     double releaseBegin=ClockMs(); Check(mutex->ReleaseSync(0), "Release display mailbox"); releaseMs=ClockMs()-releaseBegin; updated = true;
     if (validatePixels && !pixelsChecked) {
+     if(!validationStarted)validationStarted=ClockMs();
      auto stagingDesc = td; stagingDesc.Usage = D3D11_USAGE_STAGING; stagingDesc.BindFlags = 0; stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
      ComPtr<ID3D11Texture2D> staging; Check(device->CreateTexture2D(&stagingDesc,nullptr,&staging),"Create test readback");
      context->CopyResource(staging.Get(),local.Get()); D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -285,10 +291,12 @@ private:
      bool gray=abs(int(pixel[0])-128)<=3 && abs(int(pixel[1])-128)<=3 && abs(int(pixel[2])-128)<=3;
      std::string values=std::to_string(pixel[0])+","+std::to_string(pixel[1])+","+std::to_string(pixel[2]);
      context->Unmap(staging.Get(),0);
-     if (!nonblack) throw std::runtime_error("Self-test received an unexpectedly black center pixel.");
+     if (!nonblack && ClockMs()-validationStarted>3000) throw std::runtime_error("Self-test received an unexpectedly black center pixel.");
+     if (nonblack) {
      if (expectGray && !gray) throw std::runtime_error("Mid-grey colour test failed. Expected 128,128,128; got "+values);
      Log("SELFTEST mailbox pixel BGR="+values);
-     pixelsChecked=true; Log("SELFTEST GPU pixel check passed");
+     pixelsChecked=true; pixelsVerified=true; Log("SELFTEST GPU pixel check passed");
+     }
     }
    }
    float black[4] = {0,0,0,1}; context->ClearRenderTargetView(rtv.Get(), black);
@@ -346,6 +354,8 @@ class App {
  UINT dpi=96;
  std::vector<Monitor> monitors;
  Config cfg;
+ ObsSharedCapture sharedCapture;
+ bool passiveCapture=false;
  std::wstring selectedObsDir;
  fs::path base;
  ObsApi obs;
@@ -584,6 +594,10 @@ private:
    auto list = Monitors(); if (list.size()<2) throw std::runtime_error("Connect a second monitor before enabling the viewer.");
   }
   auto windowId = cfg.testPattern ? std::string() : GameWindowId();
+  FindGame game{cfg.exe};DWORD gamePid=0;
+  if(!cfg.testPattern){EnumWindows(FindWindow,reinterpret_cast<LPARAM>(&game));if(game.window)GetWindowThreadProcessId(game.window,&gamePid);}
+  passiveCapture=!cfg.testPattern && (forcePassiveTest || (!selfTest && ObsIsRunning()) || ObsSharedCapture::HookExists(gamePid));
+  if(passiveCapture){sharedCapture.Configure(gamePid,game.window);Log("Capture mode: OBS shared reader; no second hook or capture control signals");}
   Monitor selected{}; bool found = false;
   for (auto& m: Monitors()) if (m.name == cfg.monitor) { selected=m; found=true; break; }
   if (!found) throw std::runtime_error("Selected monitor is unavailable. Choose a monitor and click Apply.");
@@ -597,12 +611,13 @@ private:
   video.scale_type=OBS_SCALE_DISABLE; video.gpu_conversion=false;
   int reset = obs.obs_reset_video(&video); if (reset!=0) throw std::runtime_error("Cannot initialize capture graphics: " + std::to_string(reset));
   videoReady=true;
-  LoadCaptureModule();
-  if (!cfg.testPattern) {
+  if(!passiveCapture)LoadCaptureModule();
+  if (!cfg.testPattern && !passiveCapture) {
    auto* settings = obs.obs_data_create();
    obs.obs_data_set_string(settings,"capture_mode","window"); obs.obs_data_set_string(settings,"window",windowId.c_str());
    obs.obs_data_set_int(settings,"priority",2); obs.obs_data_set_bool(settings,"capture_cursor",false);
    obs.obs_data_set_bool(settings,"limit_framerate",false); obs.obs_data_set_bool(settings,"capture_overlays",false);
+   if(forceMemoryTest)obs.obs_data_set_bool(settings,"sli_compatibility",true);
    obs.obs_data_set_bool(settings,"anti_cheat_hook",false); obs.obs_data_set_bool(settings,"capture_audio",false);
    source=obs.obs_source_create("game_capture","TCS Viewer Capture",settings,nullptr); obs.obs_data_release(settings);
    if (!source) throw std::runtime_error("Game Capture source could not be created.");
@@ -659,15 +674,23 @@ private:
   SetWindowTextW(status,cfg.framedWindow?L"ON  /  Windowed. Drag the title bar to move.":cfg.windowed?L"ON  /  Borderless window. Press your hotkey to stop.":L"ON  /  Fullscreen. Press your hotkey to stop.");
   SetTimer(control,2,1000,nullptr);
  }
- static void DrawCallback(void* data,uint32_t,uint32_t) { static_cast<App*>(data)->Draw(); }
+ static void DrawCallback(void* data,uint32_t,uint32_t) {
+  auto* app=static_cast<App*>(data);
+  try{app->Draw();}catch(const std::exception& e){
+   app->active=false;Log(std::string("Capture error: ")+e.what());
+   auto* message=new std::wstring(Wide(e.what()));
+   if(!PostMessageW(app->control,WM_VIEWER_ERROR,0,reinterpret_cast<LPARAM>(message)))delete message;
+  }
+ }
  void Draw() {
   if (!active) return;
   double callbackBegin=ClockMs();
   if(lastCaptureCallbackMs && callbackBegin-lastCaptureCallbackMs>50)
    Log("CAPTURE CALLBACK GAP ms="+std::to_string(callbackBegin-lastCaptureCallbackMs));
   lastCaptureCallbackMs=callbackBegin;
-  unsigned width=cfg.testPattern ? bridge.width : obs.obs_source_get_width(source);
-  unsigned height=cfg.testPattern ? bridge.height : obs.obs_source_get_height(source);
+  auto* sharedTexture=passiveCapture ? sharedCapture.Update(obs,callbackBegin) : nullptr;
+  unsigned width=cfg.testPattern ? bridge.width : passiveCapture ? (sharedTexture ? obs.gs_texture_get_width(sharedTexture) : 0) : obs.obs_source_get_width(source);
+  unsigned height=cfg.testPattern ? bridge.height : passiveCapture ? (sharedTexture ? obs.gs_texture_get_height(sharedTexture) : 0) : obs.obs_source_get_height(source);
   if (!width || !height) return;
   obs.gs_texrender_reset(target);
   if (!obs.gs_texrender_begin(target,bridge.width,bridge.height)) return;
@@ -680,7 +703,14 @@ private:
    obs.gs_matrix_push(); obs.gs_matrix_identity();
    obs.gs_matrix_translate3f((bridge.width-width*scale)/2,(bridge.height-height*scale)/2,0);
    obs.gs_matrix_scale3f(scale,scale,1); obs.gs_blend_state_push(); obs.gs_reset_blend_state();
-   obs.obs_source_video_render(source);
+   if(passiveCapture){
+    auto* effect=obs.obs_get_base_effect(OBS_EFFECT_OPAQUE);
+    auto* image=obs.gs_effect_get_param_by_name(effect,"image");
+    bool previous=obs.gs_framebuffer_srgb_enabled();obs.gs_enable_framebuffer_srgb(true);
+    obs.gs_effect_set_texture_srgb(image,sharedTexture);
+    while(obs.gs_effect_loop(effect,"Draw"))obs.gs_draw_sprite(sharedTexture,sharedCapture.Flipped()?GS_FLIP_V:0,0,0);
+    obs.gs_enable_framebuffer_srgb(previous);
+   }else obs.obs_source_video_render(source);
    obs.gs_blend_state_pop(); obs.gs_matrix_pop();
   }
   obs.gs_texrender_end(target);
@@ -704,7 +734,7 @@ private:
   if (callbackReady) { obs.obs_remove_main_render_callback(DrawCallback,this); callbackReady=false; }
   if (source) { if (showing) obs.obs_source_dec_showing(source); obs.obs_source_release(source); source=nullptr; showing=false; }
   if (videoReady) {
-   obs.obs_enter_graphics(); if (target) obs.gs_texrender_destroy(target); target=nullptr; bridge.Reset(); obs.obs_leave_graphics();
+   obs.obs_enter_graphics(); sharedCapture.Reset(obs); if (target) obs.gs_texrender_destroy(target); target=nullptr; bridge.Reset(); obs.obs_leave_graphics();
    videoReady=false;
   }
   if (engineReady) { obs.obs_shutdown(); engineReady=false; moduleReady=false; Log("Viewer disabled: capture engine and graphics workers stopped"); }
@@ -760,7 +790,17 @@ private:
    if (msg==WM_COMMAND) { if (LOWORD(wp)==101) app->Apply(); if (LOWORD(wp)==102) app->Stop(); if(LOWORD(wp)==201 && HIWORD(wp)==CBN_SELCHANGE)app->UpdateWindowOptions(); return 0; }
    if (msg==WM_VIEWER_ERROR) { std::unique_ptr<std::wstring> message(reinterpret_cast<std::wstring*>(lp)); app->Stop(); throw std::runtime_error(Utf8(*message)); }
    if (msg==WM_TIMER && wp==2 && app->active) {
-    if (!app->bridge.serial.load() && ClockMs()-app->started>8000) SetWindowTextW(app->status,L"Waiting for game capture");
+    if(!app->selfTest && !app->passiveCapture && !app->cfg.testPattern && ObsIsRunning()){
+     Log("OBS opened; yielding the capture hook and switching to shared reader");app->Stop();app->Start();return 0;
+    }
+    if(!app->selfTest && app->passiveCapture && !ObsIsRunning() && !app->sharedCapture.OwnerAlive()){
+     Log("OBS closed; returning to standalone capture");app->Stop();app->Start();return 0;
+    }
+    if(app->passiveCapture && app->bridge.serial.load())
+     SetWindowTextW(app->status,ClockMs()-app->bridge.publishedMs.load()>2000?
+       L"Waiting for OBS Game Capture. Make the game's source visible in OBS.":
+       L"ON  /  Viewing OBS Game Capture. Press your hotkey to stop.");
+    if (!app->bridge.serial.load() && ClockMs()-app->started>8000) SetWindowTextW(app->status,app->passiveCapture?L"Waiting for OBS Game Capture. Make the game's source visible in OBS.":L"Waiting for game capture");
     return 0;
    }
    if (msg==WM_TEST_TOGGLE) { if(app->windowTest){app->cfg.windowSize=app->cycleCount%4;app->cfg.windowPosition=app->cycleCount%5;}app->Toggle(); SetTimer(w,3,app->fixtureTest?6000:2500,nullptr);if(app->framedTest)SetTimer(w,5,1200,nullptr); return 0; }
@@ -772,7 +812,7 @@ private:
    }
    if (msg==WM_TIMER && wp==3) {
     KillTimer(w,3);
-    if (app->bridge.serial.load()<10 || !app->presenter || app->presenter->displayed.load()<10)
+    if (app->bridge.serial.load()<10 || !app->presenter || app->presenter->displayed.load()<10 || !app->presenter->pixelsVerified.load())
      throw std::runtime_error("Self-test failed: capture or presentation did not produce enough frames.");
     if(app->framedTest){
      RECT actual;GetClientRect(app->viewer,&actual);
@@ -796,13 +836,15 @@ private:
 int WINAPI wWinMain(HINSTANCE h,HINSTANCE,PWSTR cmd,int) {
  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
  bool testing=wcsstr(cmd,L"--self-test") || wcsstr(cmd,L"--capture-test") || wcsstr(cmd,L"--ui-snapshot");
- HANDLE singleton=CreateMutexW(nullptr,FALSE,testing?L"Local\\TCSViewer-QA":L"Local\\TCSViewer-0.1");
+ HANDLE singleton=CreateMutexW(nullptr,FALSE,testing?(wcsstr(cmd,L"--passive-test")?L"Local\\TCSViewer-QA-Reader":L"Local\\TCSViewer-QA"):L"Local\\TCSViewer-0.1");
  if (!singleton || GetLastError()==ERROR_ALREADY_EXISTS) { if(!testing)MessageBoxW(nullptr,L"TCS Viewer is already running.",L"TCS Viewer",MB_OK); if(singleton)CloseHandle(singleton); return 1; }
  wchar_t path[MAX_PATH]; GetModuleFileNameW(nullptr,path,MAX_PATH); fs::path base=fs::path(path).parent_path();
  logFile.open(base/L"viewer.log",std::ios::trunc); timingFile.open(base/L"timing.csv",std::ios::trunc);
  timingFile << "qpc_ms,present_calls,reused_mailbox_frames,intervals_over_25ms,max_present_interval_ms,last_present_call_ms,last_mailbox_age_ms,producer_mutex_busy_total\n";
- Log("TCS Viewer 0.6.0-alpha.2 starting");
+ Log("TCS Viewer 0.6.1 starting");
  int result=1;
+ forcePassiveTest=testing && wcsstr(cmd,L"--passive-test")!=nullptr;
+ forceMemoryTest=testing && wcsstr(cmd,L"--memory-test")!=nullptr;
  try { App app(h,wcsstr(cmd,L"--self-test")!=nullptr,wcsstr(cmd,L"--capture-test")!=nullptr,wcsstr(cmd,L"--expect-gray")!=nullptr,wcsstr(cmd,L"--windowed-test")!=nullptr,wcsstr(cmd,L"--ui-snapshot")!=nullptr,wcsstr(cmd,L"--framed-test")!=nullptr); result=app.Run(); }
  catch(const std::exception& e) { Log(std::string("FATAL: ")+e.what()); MessageBoxW(nullptr,Wide(e.what()).c_str(),L"TCS Viewer",MB_OK|MB_ICONERROR); }
  Log("TCS Viewer exit: "+std::to_string(result)); CloseHandle(singleton); return result;
